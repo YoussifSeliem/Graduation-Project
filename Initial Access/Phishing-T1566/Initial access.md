@@ -131,65 +131,43 @@ Now are malicious document is ready and we just need to make sure there is a run
 
 ## Preparing for the detection
 
-First we need to enable logging of commands executed in powershell as it is by default is disabled on windows system. There is a couple of methods to do so but I will mention a single on that requires only a privileged powershell terminal on the target windows machine. 
-```powershell
-$scriptBlockLoggingKey = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging"
-if (-not (Test-Path $scriptBlockLoggingKey)) {
-    New-Item -Path $scriptBlockLoggingKey -Force
-}
-Set-ItemProperty -Path $scriptBlockLoggingKey -Name "EnableScriptBlockLogging" -Value 1 -Force
-$moduleLoggingKey = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ModuleLogging"
-if (-not (Test-Path $moduleLoggingKey)) {
-    New-Item -Path $moduleLoggingKey -Force
-}
-Set-ItemProperty -Path $moduleLoggingKey -Name "EnableModuleLogging" -Value 1 -Force
-$moduleNamesKey = "$moduleLoggingKey\ModuleNames"
-if (-not (Test-Path $moduleNamesKey)) {
-    New-Item -Path $moduleNamesKey -Force
-}
-New-ItemProperty -Path $moduleNamesKey -Name "*" -Value "*" -PropertyType String -Force
-$transcriptionKey = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\Transcription"
-if (-not (Test-Path $transcriptionKey)) {
-    New-Item -Path $transcriptionKey -Force
-}
-Set-ItemProperty -Path $transcriptionKey -Name "EnableTranscripting" -Value 1 -Force
+For this we will use `Sysmon` logs which short for System Monitor, is a Windows system service and device driver that logs system activity to the Windows event log. It provides detailed information about process creations, network connections, and changes to file creation time. Sysmon is designed to detect and log activities that can indicate malicious or unauthorized behavior, providing administrators with more comprehensive insights into potential threats on their systems. 
 
-Set-ItemProperty -Path $transcriptionKey -Name "OutputDirectory" -Value "C:\PowerShellLogs" -Force
+Key features of Sysmon logs typically include:
+- **Process Creation**: Logs events whenever a process is created, showing details such as the process image file path, command line, user account, and more.
+    
+- **Network Connections**: Records network connections made by processes, including details like local and remote IP addresses, ports, and protocol.
+    
+- **File Creation**: Captures events related to file creation, modification, and deletion, including file names and paths.
+    
+- **Registry Modifications**: Tracks changes made to the Windows registry, showing the process responsible and the registry path modified.
+    
+- **Driver Loading**: Logs events related to the loading of kernel drivers, including driver file paths and process information.
+    
+- **Image Loading**: Records events when DLLs are loaded into processes, providing insights into dynamic link library (DLL) usage.
+
+Installing sysmon require downloading sysmon from windows sysinternals, then opening the `cmd` in the directory of sysmon after extraction and running this command
+```
+sysmon -accepteula -i <config_file.xml>
 ```
 
-The previous code will make sure the powershell commands will be logged in the `Microsoft-Windows-PowerShell%4Operational.evtx` log file -which is an original log file in every windows system- by modifying some registry keys in a specific paths.
+For our detection rule we will use the **Process Creation** event which has an ID of 1, we will specifically look for process created where the parent is the word process and the child is powershell, something like that
 
-All is left is to make sure the log file is forwarded to the SIEM solution. In our case it really depend on how was the splunk forwarded setup, if you configured it to monitor the path `C:\Windows\System32\winevt\Logs` then the target log file will be available, otherwise you will need to modify the `etc/apps/Splunk_TA_windows/local/inputs.conf` file to include what you want.
+![](03.png)
 
 ## Constructing the detection rule
 
-Now we have the `Microsoft-Windows-PowerShell%4Operational.evtx` log file we need to focus on the Event Id `4103` and `4104`. Where the Event ID 4103 - Module Logging captures details about the execution of commands within PowerShell modules. It provides valuable information for troubleshooting issues or monitoring PowerShell activity. It log The name of the PowerShell module being used, The specific commands executed within the module and any errors or warnings encountered during execution. While Event ID 4104 - Script Block Logging captures the entire script block executed by PowerShell. This is particularly useful for security purposes, as it allows you to see the exact commands being run, even if they are obfuscated or hidden within a larger script. And the logged info are the complete script block executed by PowerShell, Information about the user or process that ran the script and The time and date the script was executed. 
-
-There is a couple of suggested alerts that lead to almost close results
+Now we have the `Microsoft-Windows-Sysmon%4Operational.evtx` log file we need to focus on the Event Id `1`.  Here is how the initial query will look like (which still need a ton of optimization)
 
 ```
-* source="WinEventLog:Microsoft-Windows-PowerShell/Operational"  EventCode=4104
-| rex field=Message "(?ms)^Creating Scriptblock text \(\d+ of \d+\):\s*(?<command>.*?)\s*ScriptBlock ID:.*\s*Path:.*"
-| table _time ComputerName User command
-| rename command as "Command"
+source="WinEventLog:Microsoft-Windows-Sysmon/Operational" EventCode=1 Message=*powershell* Message=*WINWORD.EXE*
+| eval lines=split(Message, " ")
+| eval specific_line=mvindex(lines, 7)  
+| table _time EventCode  specific_line
 ```
 
-```
-* source="WinEventLog:Microsoft-Windows-PowerShell/Operational" EventCode=4103
-| rex field=Message "(?ms)^Creating Scriptblock text \(\d+ of \d+\):\s*(?<command>.*?)\s*ScriptBlock ID:.*\s*Path:.*"
-| rex field=Message "(?ms)^(?<message_content>.*?)(?=Context:)"
-| table _time ComputerName User command message_content
-| rename command as "Command", message_content as "Message Content"
-```
+and the output will look like
 
-Or you could use this query that try to combine them both
+![](04.png)
 
-```
-* source="WinEventLog:Microsoft-Windows-PowerShell/Operational"  (EventCode=4104 OR EventID=4104)
-| rex field=Message "(?ms)^Creating Scriptblock text \(\d+ of \d+\):\s*(?<command>.*?)\s*ScriptBlock ID:.*\s*Path:.*"
-| rex field=Message "(?ms)^(?<message_content>.*?)(?=Context:)"
-| table _time ComputerName User command message_content
-| rename command as "Command", message_content as "Message Content"
-```
-
-And save it as an alert in real time with the appropriate priority.
+Which will be enough for creating an Alert and looking through it.

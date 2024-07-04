@@ -50,13 +50,72 @@ A single simple payload is used, where the command `whoami` is just used to get 
 
 After getting the reverse shell from the malicious document all we need to do is execute the `whoami` command
 
-![](02.png)
+![[02.png]]
 
 
 ## Preparing for the detection
 
-The same steps from the `initial access` preparation is required, if done then move to the next step. If not go back to the previous chapter.
+First we need to enable logging of commands executed in powershell as it is by default is disabled on windows system. There is a couple of methods to do so but I will mention a single on that requires only a privileged powershell terminal on the target windows machine. 
+```powershell
+$scriptBlockLoggingKey = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging"
+if (-not (Test-Path $scriptBlockLoggingKey)) {
+    New-Item -Path $scriptBlockLoggingKey -Force
+}
+Set-ItemProperty -Path $scriptBlockLoggingKey -Name "EnableScriptBlockLogging" -Value 1 -Force
+$moduleLoggingKey = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ModuleLogging"
+if (-not (Test-Path $moduleLoggingKey)) {
+    New-Item -Path $moduleLoggingKey -Force
+}
+Set-ItemProperty -Path $moduleLoggingKey -Name "EnableModuleLogging" -Value 1 -Force
+$moduleNamesKey = "$moduleLoggingKey\ModuleNames"
+if (-not (Test-Path $moduleNamesKey)) {
+    New-Item -Path $moduleNamesKey -Force
+}
+New-ItemProperty -Path $moduleNamesKey -Name "*" -Value "*" -PropertyType String -Force
+$transcriptionKey = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\Transcription"
+if (-not (Test-Path $transcriptionKey)) {
+    New-Item -Path $transcriptionKey -Force
+}
+Set-ItemProperty -Path $transcriptionKey -Name "EnableTranscripting" -Value 1 -Force
 
+Set-ItemProperty -Path $transcriptionKey -Name "OutputDirectory" -Value "C:\PowerShellLogs" -Force
+```
+
+The previous code will make sure the powershell commands will be logged in the `Microsoft-Windows-PowerShell%4Operational.evtx` log file -which is an original log file in every windows system- by modifying some registry keys in a specific paths.
+
+All is left is to make sure the log file is forwarded to the SIEM solution. In our case it really depend on how was the splunk forwarded setup, if you configured it to monitor the path `C:\Windows\System32\winevt\Logs` then the target log file will be available, otherwise you will need to modify the `etc/apps/Splunk_TA_windows/local/inputs.conf` file to include what you want.
 ## Constructing the detection rule
 
-The same steps from the `initial access` constructing the detection rule is used, if done then move to the next step. If not go back to the previous chapter.
+Now we have the `Microsoft-Windows-PowerShell%4Operational.evtx` log file we need to focus on the Event Id `4103` and `4104`. Where the Event ID 4103 - Module Logging captures details about the execution of commands within PowerShell modules. It provides valuable information for troubleshooting issues or monitoring PowerShell activity. It log The name of the PowerShell module being used, The specific commands executed within the module and any errors or warnings encountered during execution. While Event ID 4104 - Script Block Logging captures the entire script block executed by PowerShell. This is particularly useful for security purposes, as it allows you to see the exact commands being run, even if they are obfuscated or hidden within a larger script. And the logged info are the complete script block executed by PowerShell, Information about the user or process that ran the script and The time and date the script was executed. 
+
+There is a couple of suggested alerts that lead to almost close results
+
+```
+* source="WinEventLog:Microsoft-Windows-PowerShell/Operational"  EventCode=4104
+| rex field=Message "(?ms)^Creating Scriptblock text \(\d+ of \d+\):\s*(?<command>.*?)\s*ScriptBlock ID:.*\s*Path:.*"
+| table _time ComputerName User command
+| rename command as "Command"
+```
+
+```
+* source="WinEventLog:Microsoft-Windows-PowerShell/Operational" EventCode=4103
+| rex field=Message "(?ms)^Creating Scriptblock text \(\d+ of \d+\):\s*(?<command>.*?)\s*ScriptBlock ID:.*\s*Path:.*"
+| rex field=Message "(?ms)^(?<message_content>.*?)(?=Context:)"
+| table _time ComputerName User command message_content
+| rename command as "Command", message_content as "Message Content"
+```
+
+Or you could use this query that try to combine them both
+
+```
+* source="WinEventLog:Microsoft-Windows-PowerShell/Operational"  (EventCode=4104 OR EventID=4104)
+| rex field=Message "(?ms)^Creating Scriptblock text \(\d+ of \d+\):\s*(?<command>.*?)\s*ScriptBlock ID:.*\s*Path:.*"
+| rex field=Message "(?ms)^(?<message_content>.*?)(?=Context:)"
+| table _time ComputerName User command message_content
+| rename command as "Command", message_content as "Message Content"
+```
+
+And save it as an alert in real time with the appropriate priority. The search result will look like this
+
+![](05.png)
+
