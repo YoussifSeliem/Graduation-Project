@@ -17,7 +17,7 @@ Our Lab consists of an Attacker Kali Linux machine in the same network with the 
 On the Domain controller has splunk forwarder to forward the logs in the domain controller machine to the machine containing splunk.
 On the Kali linux machine The attacking scripts will be run to do different attacks on the domain controller.
 
-<img src="/Assets/imgs/network_topology.PNG" alt="network topology">
+<img src="/Assets/imgs/network_topology.png" alt="network topology">
 
 ### Steps
 In the attacking side we will follow some techniques from MITRE ATT&CK as a reference and we will try to create a detection rules on splunk for these attacks as a defensive side
