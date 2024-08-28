@@ -11,6 +11,7 @@ if len(sys.argv) != 3:
 # Extract interface and IP address from command-line arguments
 interface = sys.argv[1]
 ip_address = sys.argv[2]
+name = sys.argv[3]
 
 # Run masscan
 masscan_output = subprocess.run(['masscan', '-p', '1-65535', '--interface', interface, '--rate', '1000', ip_address], capture_output=True, text=True).stdout
@@ -27,7 +28,7 @@ if "Discovered open port" in masscan_output:
     print("Open ports found:", port_numbers_str)
     
     # Create nmap command
-    nmap_command = f"nmap -sV -sC -Pn -p {port_numbers_str} -oA name {ip_address}"
+    nmap_command = f"nmap -sV -sC -Pn -p {port_numbers_str} -oA {name} {ip_address}"
     
     # Run nmap command
     print("Running command:", nmap_command)
