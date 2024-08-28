@@ -4,8 +4,8 @@ import subprocess
 import sys
 
 # Check if correct number of arguments are provided
-if len(sys.argv) != 3:
-    print("Usage: python scan_script.py <interface> <IP>")
+if len(sys.argv) != 4:
+    print("Usage: python scan_script.py <interface> <IP> <outputFileName>")
     sys.exit(1)
 
 # Extract interface and IP address from command-line arguments
